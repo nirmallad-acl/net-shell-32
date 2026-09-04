@@ -15,6 +15,8 @@
 
 # Log files
 *.log
+# Exception: tracked, redacted hardware test-evidence logs for PRs
+!docs/verification/**/*.log
 
 # Build artifacts and directories
 **/build/
@@ -90,3 +92,6 @@ sdkconfig.defaults.old
 .idea/
 .vscode/
 *.code-workspace
+
+# Local firmware-agent workitem state (not shared via git)
+.claude/workitem/
