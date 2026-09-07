@@ -1,14 +1,24 @@
-/*
- * net_cli.h -- public surface of the net_cli component.
+/**
+ * @file net_cli.h
+ * @brief Public interface for the net_cli component
  *
+ * @author Nirmal Lad <nirmal.lad@acldigital.com>
+ * @date 2026-09-07
+ *
+ * @copyright Copyright (c) 2026 ACL Digital Pvt Ltd. All rights reserved.
+ *
+ * CONFIDENTIALITY NOTICE:
+ * This software and documentation are the confidential and proprietary
+ * information of ACL Digital Pvt Ltd. Unauthorized copying, distribution,
+ * modification, or reverse engineering of this file, via any medium,
+ * is strictly prohibited.
+ */
+
+/*
  * This is the ENTIRE public surface: four functions and one POD struct.
  * No handle types, no callbacks, no IDF types are leaked here -- anything a
- * command implementation needs beyond this lives in
- * private_include/net_cli_internal.h, which is NOT reachable from main/
- * (CMake places it on net_cli's PRIV_INCLUDE_DIRS). This is what makes
- * NFR-22 (no new non-static globals / declared public-vs-internal boundary)
- * a compile-time property rather than a review promise. See tech_spec.md
- * §5.3.
+ * command implementation needs beyond this lives in net_cli_internal.h
+ * (private include directory). This enforces a compile-time boundary.
  */
 #pragma once
 

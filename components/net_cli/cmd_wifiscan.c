@@ -1,12 +1,24 @@
-/*
- * cmd_wifiscan.c -- FR-27..FR-33, IMP-6..IMP-11.
+/**
+ * @file cmd_wifiscan.c
+ * @brief wifiscan command: scan for and display nearby Wi-Fi networks
  *
- * The single easiest mistake in this file: every early-return path (steps
- * 4, 5, 7 below, PLUS step 8's own error branch -- DA-4) must call
- * esp_wifi_clear_ap_list(), because esp_wifi_scan_get_ap_records() only
- * releases the driver-internal AP list on the path that actually reaches it
- * (V6-4). Missing any one of the four is a driver-heap leak that
- * free(recs) discipline alone cannot catch. See tech_spec.md §7.2, R-3.
+ * @author Nirmal Lad <nirmal.lad@acldigital.com>
+ * @date 2026-09-07
+ *
+ * @copyright Copyright (c) 2026 ACL Digital Pvt Ltd. All rights reserved.
+ *
+ * CONFIDENTIALITY NOTICE:
+ * This software and documentation are the confidential and proprietary
+ * information of ACL Digital Pvt Ltd. Unauthorized copying, distribution,
+ * modification, or reverse engineering of this file, via any medium,
+ * is strictly prohibited.
+ */
+
+/*
+ * CRITICAL: Every early-return path must call esp_wifi_clear_ap_list(),
+ * because esp_wifi_scan_get_ap_records() only releases the driver-internal
+ * AP list on the path that actually reaches it. Missing any one of these
+ * calls is a driver-heap leak that free(recs) discipline alone cannot catch.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -33,10 +45,9 @@ static int cmd_wifiscan_handler(int argc, char **argv)
     }
 
     wifi_scan_config_t scan_cfg = { 0 };
-    scan_cfg.show_hidden = true;   /* IMP-6 / FR-31 */
+    scan_cfg.show_hidden = true;   /* Include hidden networks. */
 
-    /* IMP-7 / FR-28: blocking scan. OQ-12 (§8.7): surface driver errors
-     * verbatim, never retry, never implicitly disconnect. */
+    /* Blocking scan; surface driver errors verbatim, never retry. */
     esp_err_t scan_err = esp_wifi_scan_start(&scan_cfg, true);
     if (scan_err != ESP_OK) {
         printf("wifiscan: scan failed (%s)\n", esp_err_to_name(scan_err));
@@ -44,7 +55,7 @@ static int cmd_wifiscan_handler(int argc, char **argv)
     }
 
     uint16_t found = 0;
-    esp_err_t num_err = esp_wifi_scan_get_ap_num(&found);   /* IMP-8 */
+    esp_err_t num_err = esp_wifi_scan_get_ap_num(&found);
     if (num_err != ESP_OK) {
         printf("wifiscan: failed to read AP count (%s)\n", esp_err_to_name(num_err));
         esp_wifi_clear_ap_list();
@@ -52,55 +63,50 @@ static int cmd_wifiscan_handler(int argc, char **argv)
     }
 
     if (found == 0) {
-        printf("No networks found.\n");   /* FR-32: success, not a failure */
+        printf("No networks found.\n");
         esp_wifi_clear_ap_list();
         return 0;
     }
 
-    /* OQ-4 clamp. Leak-free by construction on the success path (V6-4):
-     * esp_wifi_scan_get_ap_records() frees the WHOLE driver-side list
-     * regardless of how few records are requested. */
+    /* Clamp to max APs we can display. esp_wifi_scan_get_ap_records() frees
+     * the ENTIRE driver-side list regardless of how many we request. */
     uint16_t want = (found > NET_CLI_SCAN_MAX_APS) ? (uint16_t)NET_CLI_SCAN_MAX_APS : found;
 
-    /* calloc, not malloc: any field the driver does not populate reads as
-     * zero rather than garbage (cheap insurance for the %s in the print
-     * loop below). IMP-9. */
+    /* Use calloc to ensure unpopulated fields read as zero, not garbage
+     * (cheap insurance for the %s in the print loop). */
     wifi_ap_record_t *recs = calloc(want, sizeof(wifi_ap_record_t));
     if (recs == NULL) {
-        printf("wifiscan: out of memory (%u records)\n", (unsigned)want);   /* IMP-11 */
+        printf("wifiscan: out of memory (%u records)\n", (unsigned)want);
         esp_wifi_clear_ap_list();
         return 1;
     }
 
-    uint16_t got = want;   /* in/out */
-    esp_err_t rec_err = esp_wifi_scan_get_ap_records(&got, recs);   /* IMP-9 */
+    uint16_t got = want;   /* in/out parameter */
+    esp_err_t rec_err = esp_wifi_scan_get_ap_records(&got, recs);
     if (rec_err != ESP_OK) {
         printf("wifiscan: failed to read AP records (%s)\n", esp_err_to_name(rec_err));
         free(recs);
         recs = NULL;
-        /* DA-4: not proven by source that a failing call still frees the
-         * driver-side list, so clear it defensively -- a no-op on an
-         * already-freed list, but the missing case is a real leak. */
+        /* Defensively clear the driver-side list even on error; the exact
+         * driver behavior is unspecified, so this guards against leaks. */
         esp_wifi_clear_ap_list();
-        return 1;   /* IMP-10 */
+        return 1;
     }
 
-    /* FR-29: column-aligned header + rule line. Build the rule from a
-     * padding source via precision so its length is provably exact instead
-     * of relying on manually counted dashes in a string literal. */
+    /* Column-aligned header with rule line. Build the rule via precision
+     * so its length is provably exact, not hand-counted. */
     static const char k_pad[] = "----------------------------------------";  /* >=32 chars */
     printf("%-32s  %5s  %3s\n", "SSID", "RSSI", "CH");
     printf("%.*s  %.*s  %.*s\n", 32, k_pad, 5, k_pad, 3, k_pad);
 
     for (uint16_t i = 0; i < got; i++) {
-        /* FR-33: no over-read even though the driver NUL-terminates ssid --
-         * copy exactly 32 bytes, terminate explicitly, print with an
-         * explicit precision as a second line of defence (§7.0 rule 7). */
+        /* Copy exactly 32 bytes and terminate explicitly; print with
+         * explicit precision to prevent over-reading the SSID buffer. */
         char ssid_buf[33];
         memcpy(ssid_buf, recs[i].ssid, 32);
         ssid_buf[32] = '\0';
         if (ssid_buf[0] == '\0') {
-            strcpy(ssid_buf, "<hidden>");   /* FR-31 -- literal into a 33-byte buffer, safe */
+            strcpy(ssid_buf, "<hidden>");   /* Safe: 33-byte buffer for 8-byte literal. */
         }
         printf("%-32.32s  %5d  %3u\n", ssid_buf, recs[i].rssi, (unsigned)recs[i].primary);
     }
@@ -113,7 +119,7 @@ static int cmd_wifiscan_handler(int argc, char **argv)
     printf("%u network(s) found.\n", (unsigned)found);
 
     free(recs);
-    recs = NULL;   /* IMP-10 */
+    recs = NULL;
     return 0;
 }
 

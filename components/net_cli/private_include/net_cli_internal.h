@@ -1,11 +1,23 @@
-/*
- * net_cli_internal.h -- component-internal contract.
+/**
+ * @file net_cli_internal.h
+ * @brief Component-internal interface: state, sync primitives, and command registration
  *
- * NOT reachable from main/ (this directory is on net_cli's
- * PRIV_INCLUDE_DIRS only). Declares the sync primitives, the boot-status
- * accessor, the shared compile-time limits and output format helpers, and
- * the four per-command registrars that net_cli.c aggregates. See
- * tech_spec.md §5.4.
+ * @author Nirmal Lad <nirmal.lad@acldigital.com>
+ * @date 2026-09-07
+ *
+ * @copyright Copyright (c) 2026 ACL Digital Pvt Ltd. All rights reserved.
+ *
+ * CONFIDENTIALITY NOTICE:
+ * This software and documentation are the confidential and proprietary
+ * information of ACL Digital Pvt Ltd. Unauthorized copying, distribution,
+ * modification, or reverse engineering of this file, via any medium,
+ * is strictly prohibited.
+ */
+
+/*
+ * Not reachable from main/ (private include directory only). Declares sync
+ * primitives, boot-status accessors, shared constants, format helpers, and
+ * per-command registrars that net_cli.c aggregates.
  */
 #pragma once
 
@@ -21,20 +33,19 @@
 extern "C" {
 #endif
 
-/* ---- Shared compile-time limits and formats (§7, §8.5) ---- */
+/* Shared compile-time limits and output formats. */
 
-#define NET_CLI_SCAN_MAX_APS       20u     /* GATE 1 / OQ-4 */
-#define NET_CLI_WIFI_CONNECT_MS    10000u  /* OQ-5 */
-#define NET_CLI_PING_WAIT_MS       8000u   /* §6.5.3 -- GATE 2 R-6: accepted as-is, do not shorten */
-#define NET_CLI_PING_JOIN_MS       3000u   /* §6.5.3 -- derived from esp_ping's ~2 s worst-case residual + margin */
-#define NET_CLI_PING_TASK_STACK    4096u   /* §8.5 / DA-6 -- MUST override ESP_TASK_PING_STACK */
-#define NET_CLI_PING_COUNT         4u      /* FR-44 -- MUST override esp_ping's default of 5 */
+#define NET_CLI_SCAN_MAX_APS       20u     /* Maximum APs to cache in scan results. */
+#define NET_CLI_WIFI_CONNECT_MS    10000u  /* Timeout for connection attempts. */
+#define NET_CLI_PING_WAIT_MS       8000u   /* Timeout for ping to complete. */
+#define NET_CLI_PING_JOIN_MS       3000u   /* Timeout for ping task cleanup on abort. */
+#define NET_CLI_PING_TASK_STACK    4096u   /* Stack size for ping task (overrides default). */
+#define NET_CLI_PING_COUNT         4u      /* Number of ICMP packets to send (overrides default). */
 
-/* Lowercase colon-separated MAC format. MACSTR/MAC2STR are not public
- * headers for a Wi-Fi-only build in v6.0.2 -- do not use them (§7.1/§8.1). */
+/* Lowercase colon-separated MAC format. */
 #define NET_CLI_MACSTR "%02x:%02x:%02x:%02x:%02x:%02x"
 
-/* ---- wifi_connect outcome (§6.4, §7.3.4) ---- */
+/* wifi_connect result: outcome code and failure reason if applicable. */
 
 typedef enum {
     NET_CLI_CONNECT_CONNECTED = 0,
@@ -44,56 +55,42 @@ typedef enum {
 
 typedef struct {
     net_cli_connect_outcome_t outcome;
-    uint8_t                   reason;  /* wifi_err_reason_t value; valid iff outcome == FAILED */
+    uint8_t                   reason;  /* Disconnect reason; valid iff outcome == FAILED. */
 } net_cli_connect_result_t;
 
-/* ---- ping session state shared with the esp_ping callbacks (§6.5.2) ----
- * Passed as esp_ping_callbacks_t.cb_args. One static instance is sufficient
- * because the reclaim gate (§6.5.4) guarantees at most one session exists
- * at any time. */
+/* ping session state shared with esp_ping callbacks. One static instance
+ * suffices because the reclaim gate ensures at most one session exists
+ * concurrently. Passed as esp_ping_callbacks_t.cb_args. */
 typedef struct {
-    volatile bool abandoned;  /* REPL stopped waiting: callbacks must not print */
+    volatile bool abandoned;  /* If true, callbacks must not print. */
 } net_cli_ping_state_t;
 
-/* ---- net_cli_wifi_state.c: sole owner of the event group, ping semaphore,
- * last-disconnect-reason and boot-status record (P-B4) ---- */
-
-/* Creates the event group + ping semaphore and registers the WIFI_EVENT/
- * IP_EVENT handler. Called once, from net_cli_init(). Idempotent: a second
- * call returns ESP_ERR_INVALID_STATE. */
+/* Initialize the event group, ping semaphore, and Wi-Fi/IP event handlers.
+ * Called once from net_cli_init(). Idempotent: returns ESP_ERR_INVALID_STATE
+ * on a second call. */
 esp_err_t net_cli_wifi_state_init(void);
 
-/* True iff wifi_init, wifi_set_mode, wifi_start AND cli_init (DA-2) all
- * recorded ESP_OK in the boot-status record. Gate used by wifiscan,
- * wifi_connect and ping (§7.0 rule 5). */
+/* True iff Wi-Fi subsystem boot succeeded. Gate for commands that require
+ * Wi-Fi (wifiscan, wifi_connect, ping). */
 bool net_cli_wifi_ready(void);
 
-/* True iff net_cli_init() itself recorded ESP_OK and both the event group
- * and the ping semaphore are non-NULL. The last-line-of-defence predicate
- * that must be true before ANY blocking wait on those handles -- a NULL
- * FreeRTOS handle must never reach xEventGroupWaitBits/xSemaphoreTake even
- * if the boot-status bookkeeping somehow disagrees (DA-2). */
+/* True iff sync primitives are ready to use. Must be true before any
+ * blocking wait on the event group or ping semaphore. */
 bool net_cli_sync_ready(void);
 
-/* Read-only accessor for the boot-status record net_cli_set_boot_status()
- * copied in (used by net_cli_print_boot_banner()). */
+/* Read-only accessor for the boot-status record. Used by boot banner. */
 const net_cli_boot_status_t *net_cli_boot_status_get(void);
 
-/* Runs the full §6.4 connect sequence: pre-emptive disconnect, settle,
- * arm, esp_wifi_set_config()+esp_wifi_connect(), bounded wait, classify.
- * Returns ESP_ERR_INVALID_STATE without blocking if net_cli_sync_ready()
- * is false; ESP_ERR_INVALID_ARG if cfg/out is NULL; otherwise ESP_OK with
- * *out populated (including on a Wi-Fi driver call failure that occurs
- * mid-sequence -- see cmd_wifi_connect.c for exactly which esp_err_t
- * values are surfaced instead). */
+/* Run a full Wi-Fi connect sequence: disconnect, settle, arm event handlers,
+ * configure and connect, wait for result. Returns ESP_ERR_INVALID_STATE if
+ * sync primitives unavailable, ESP_ERR_INVALID_ARG if args are NULL,
+ * otherwise ESP_OK with *out populated. */
 esp_err_t net_cli_wifi_connect_attempt(const wifi_config_t *cfg,
                                         uint32_t timeout_ms,
                                         net_cli_connect_result_t *out);
 
-/* Accessors for the boot-created ping semaphore and the single static ping
- * session state record (§6.5.2). Both return NULL/never-NULL consistently
- * with net_cli_wifi_state_init() having run; callers must still gate on
- * net_cli_sync_ready() before blocking on the semaphore (DA-2). */
+/* Accessors for the ping semaphore and session state record. Used by
+ * cmd_ping.c. Callers must gate on net_cli_sync_ready() before blocking. */
 SemaphoreHandle_t     net_cli_ping_done_sem(void);
 net_cli_ping_state_t *net_cli_ping_state(void);
 

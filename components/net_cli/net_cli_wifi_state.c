@@ -1,15 +1,27 @@
+/**
+ * @file net_cli_wifi_state.c
+ * @brief Sole owner of cross-context Wi-Fi/ping state and event handlers
+ *
+ * @author Nirmal Lad <nirmal.lad@acldigital.com>
+ * @date 2026-09-07
+ *
+ * @copyright Copyright (c) 2026 ACL Digital Pvt Ltd. All rights reserved.
+ *
+ * CONFIDENTIALITY NOTICE:
+ * This software and documentation are the confidential and proprietary
+ * information of ACL Digital Pvt Ltd. Unauthorized copying, distribution,
+ * modification, or reverse engineering of this file, via any medium,
+ * is strictly prohibited.
+ */
+
 /*
- * net_cli_wifi_state.c -- sole owner of this feature's cross-context state.
+ * Everything touched by multiple execution contexts lives here: the connect
+ * event group, ping semaphore, last-disconnect-reason, connect-armed flag,
+ * ping-abandoned flag, and boot-status record. This is the only file that
+ * registers or runs WIFI_EVENT/IP_EVENT handlers.
  *
- * Everything that is touched by more than one execution context lives here
- * and nowhere else (P-B4): the connect event group, the ping semaphore, the
- * last-disconnect-reason, the connect-armed flag, the ping-abandoned flag
- * and the boot-status record. This is also the only file that registers or
- * runs the WIFI_EVENT/IP_EVENT handler. See tech_spec.md §6.4, §9.2, §9.3.
- *
- * All FreeRTOS primitives are created with the *Static variants, so this
- * module's entire concurrency layer costs zero heap bytes (NFR-9) -- backing
- * storage lands in BSS, sized at compile time.
+ * All FreeRTOS primitives use *Static variants, so the concurrency layer
+ * costs zero heap bytes -- backing storage in BSS, sized at compile time.
  */
 #include <string.h>
 #include "freertos/FreeRTOS.h"
@@ -25,7 +37,7 @@
 #define NET_CLI_WIFI_CONNECTED_BIT  BIT0  /* IP_EVENT_STA_GOT_IP seen         */
 #define NET_CLI_WIFI_FAIL_BIT       BIT1  /* WIFI_EVENT_STA_DISCONNECTED seen */
 
-/* ---- boot-time, statically allocated cross-context state (§9.2) ---- */
+/* Statically allocated cross-context state created at boot time. */
 
 static StaticEventGroup_t           s_wifi_evt_grp_storage;
 static EventGroupHandle_t           s_wifi_evt_grp;
@@ -36,24 +48,21 @@ static StaticSemaphore_t     s_ping_done_storage;
 static SemaphoreHandle_t     s_ping_done_sem;
 static net_cli_ping_state_t  s_ping_state;
 
-/* Written by the event-loop task, read by the REPL task. Single-word,
- * volatile; publication is ordered by the event-group bit (§9.3): the
- * reason is stored BEFORE FAIL_BIT is set, and read only AFTER
- * xEventGroupWaitBits() observes FAIL_BIT. */
+/* Last disconnect reason; written by event loop, read by REPL task.
+ * Synchronized by event group bit: reason stored BEFORE FAIL_BIT set,
+ * read only AFTER xEventGroupWaitBits() observes FAIL_BIT. */
 static volatile uint8_t s_last_disconnect_reason;
 
-/* Written by the REPL task (arm/disarm around a connect attempt), read by
- * the event-loop task. Not a lock -- see §7.3.5 / §9.3. */
+/* Connect armed flag: written by REPL task, read by event loop. */
 static volatile bool s_connect_armed;
 
-static net_cli_boot_status_t s_boot_status;   /* written once, by value, at boot step 9 (DA-10) */
+/* Boot status record; written once at boot time, read only thereafter. */
+static net_cli_boot_status_t s_boot_status;
 static bool                  s_state_initialized;
 
-/* ---- Wi-Fi/IP event handlers -- deliberately minimal (NFR-19) ----
- * A byte store and a bit set, nothing else: no printf, no ESP_LOGx, no
- * blocking call, no allocation, no esp_wifi_ or esp_netif_ call. This keeps
- * the system event loop unblocked and guarantees our code contributes zero
- * log/print output from event context (NFR-4). */
+/* Wi-Fi/IP event handlers: deliberately minimal. Only store a byte and set
+ * a bit; no printf, no ESP_LOGx, no blocking I/O, no allocation, no calls
+ * to esp_wifi_ or esp_netif_. This keeps the system event loop unblocked. */
 
 static void wifi_evt_handler(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
@@ -77,14 +86,12 @@ static void ip_evt_handler(void *arg, esp_event_base_t base, int32_t id, void *d
     (void)arg;
     (void)data;
     if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
-        /* Unconditional -- does NOT consult s_connect_armed. A lease that
-         * arrives after a Timeout verdict still sets the bit; the NEXT
-         * invocation's pre-connect clear is what absorbs it (§6.4). */
+        /* Always set bit unconditionally, even if this is a late arrival
+         * after a prior Timeout verdict. The next connect's pre-check will
+         * clear stale bits. */
         xEventGroupSetBits(s_wifi_evt_grp, NET_CLI_WIFI_CONNECTED_BIT);
     }
 }
-
-/* ---- boot-time setup ---- */
 
 esp_err_t net_cli_wifi_state_init(void)
 {
@@ -94,7 +101,7 @@ esp_err_t net_cli_wifi_state_init(void)
 
     s_wifi_evt_grp = xEventGroupCreateStatic(&s_wifi_evt_grp_storage);
     if (s_wifi_evt_grp == NULL) {
-        return ESP_ERR_NO_MEM;   /* static creation "cannot fail"; defensive only */
+        return ESP_ERR_NO_MEM;
     }
 
     s_ping_done_sem = xSemaphoreCreateBinaryStatic(&s_ping_done_storage);
@@ -126,7 +133,7 @@ esp_err_t net_cli_set_boot_status(const net_cli_boot_status_t *status)
     if (status == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
-    s_boot_status = *status;   /* by-value copy -- DA-10; never retain the pointer */
+    s_boot_status = *status;   /* By-value copy; never retain the pointer. */
     return ESP_OK;
 }
 
@@ -140,7 +147,7 @@ bool net_cli_wifi_ready(void)
     return (s_boot_status.wifi_init == ESP_OK) &&
            (s_boot_status.wifi_set_mode == ESP_OK) &&
            (s_boot_status.wifi_start == ESP_OK) &&
-           (s_boot_status.cli_init == ESP_OK);           /* DA-2 conjunct */
+           (s_boot_status.cli_init == ESP_OK);
 }
 
 bool net_cli_sync_ready(void)

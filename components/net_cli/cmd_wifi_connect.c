@@ -1,13 +1,23 @@
+/**
+ * @file cmd_wifi_connect.c
+ * @brief wifi_connect command: join a Wi-Fi network with SSID and optional password
+ *
+ * @author Nirmal Lad <nirmal.lad@acldigital.com>
+ * @date 2026-09-07
+ *
+ * @copyright Copyright (c) 2026 ACL Digital Pvt Ltd. All rights reserved.
+ *
+ * CONFIDENTIALITY NOTICE:
+ * This software and documentation are the confidential and proprietary
+ * information of ACL Digital Pvt Ltd. Unauthorized copying, distribution,
+ * modification, or reverse engineering of this file, via any medium,
+ * is strictly prohibited.
+ */
+
 /*
- * cmd_wifi_connect.c -- FR-34..FR-41, IMP-12..IMP-15.
- *
- * Credential copy uses length-validated memcpy, not strncpy (DV-2 / GATE 2
- * R-4 -- approved): a literal strncpy(dst, src, sizeof(dst)) risks
- * -Wstringop-truncation under NFR-21's zero-warning gate, and the
- * sizeof(dst)-1 workaround would truncate a legitimate 32-byte SSID.
- *
- * NFR-24: the password is never echoed, in any form -- not even its
- * length.
+ * Credential copy uses length-validated memcpy instead of strncpy to avoid
+ * -Wstringop-truncation warnings while safely handling 32-byte SSIDs.
+ * Password is never echoed in any form, not even its length.
  */
 #include <stdio.h>
 #include <string.h>
@@ -18,22 +28,17 @@
 #include "argtable3/argtable3.h"
 #include "net_cli_internal.h"
 
-/* DV-3 / GATE 2 R-5 (approved): allocated once at registration, never freed
- * per invocation -- freeing on a parse-error path would be a
- * use-after-free, since the console references this struct for the
- * program's lifetime (§7.0 rule 3). */
+/* Argtable structures allocated once at registration, never freed per
+ * invocation: freeing on a parse-error path would be a use-after-free,
+ * since the console holds this struct for the program's lifetime. */
 static struct {
     struct arg_str *ssid;
     struct arg_str *pass;
     struct arg_end *end;
 } s_connect_args;
 
-/* V6-5: no public wifi_err_reason_t-to-string helper exists in v6.0.2.
- * WIFI_REASON_ASSOC_EXPIRE is NOT a case here: the tech spec's candidate
- * list included it, but it does not exist in the installed v6.0.2
- * esp_wifi_types_generic.h (verified by grep) -- dropped per the spec's own
- * instruction to confirm each label against the installed header rather
- * than guess (§7.3.4). */
+/* No public wifi_err_reason_t-to-string helper exists in v6.0.2, so we
+ * provide our own mapping for common disconnection reasons. */
 static const char *net_cli_wifi_reason_str(uint8_t reason)
 {
     switch (reason) {
@@ -57,22 +62,20 @@ static int cmd_wifi_connect_handler(int argc, char **argv)
         return 1;
     }
 
-    /* arg_str1("s", ...) makes -s mandatory: on a parse error we return
-     * before touching any Wi-Fi state -- FR-35, no config write, no
-     * connect attempt. */
+    /* SSID is mandatory; parse errors return before touching Wi-Fi state. */
     int nerrors = arg_parse(argc, argv, (void **)&s_connect_args);
     if (nerrors != 0) {
         arg_print_errors(stderr, s_connect_args.end, argv[0]);
-        return 1;   /* argtable owns its own storage -- nothing to free here (DV-3) */
+        return 1;
     }
 
     const char *ssid = s_connect_args.ssid->sval[0];
-    const char *pass = (s_connect_args.pass->count > 0) ? s_connect_args.pass->sval[0] : "";  /* FR-36 */
+    const char *pass = (s_connect_args.pass->count > 0) ? s_connect_args.pass->sval[0] : "";
 
     size_t ssid_len = strlen(ssid);
     size_t pass_len = strlen(pass);
 
-    /* OQ-8 (§8.4): reject, never truncate. */
+    /* Reject over-length credentials; never truncate. */
     if (ssid_len == 0) {
         printf("wifi_connect: SSID must not be empty\n");
         return 1;
@@ -86,24 +89,20 @@ static int cmd_wifi_connect_handler(int argc, char **argv)
         return 1;
     }
 
-    wifi_config_t cfg = { 0 };   /* zero-initialised -- IMP-15 */
+    wifi_config_t cfg = { 0 };   /* Zero-initialize to ensure no stale fields. */
 
-    /* Redundant re-clamp (DA-7): the checks above already returned on an
-     * over-length value, so this is dead code at runtime and free at
-     * compile time (GCC folds it once the range is known) -- but it keeps
-     * each memcpy's length statically bounded by the destination size at
-     * the call site, with no reliance on value-range propagation crossing
-     * the earlier `return 1` guard under -Wstringop-overflow. */
+    /* Redundant bounds-checking here helps the compiler prove memcpy lengths
+     * are bounded, with no reliance on value-range propagation past the
+     * earlier length checks. */
     size_t ssid_n = (ssid_len <= sizeof(cfg.sta.ssid))     ? ssid_len : sizeof(cfg.sta.ssid);
     size_t pass_n = (pass_len <= sizeof(cfg.sta.password)) ? pass_len : sizeof(cfg.sta.password);
 
-    memcpy(cfg.sta.ssid, ssid, ssid_n);         /* DV-2 -- ssid_n <= 32, twice-bounded */
-    memcpy(cfg.sta.password, pass, pass_n);     /* DV-2 -- pass_n <= 64, twice-bounded */
-    cfg.sta.threshold.authmode = WIFI_AUTH_OPEN;   /* open networks work; no forced minimum */
+    memcpy(cfg.sta.ssid, ssid, ssid_n);
+    memcpy(cfg.sta.password, pass, pass_n);
+    cfg.sta.threshold.authmode = WIFI_AUTH_OPEN;   /* Accept open networks; no minimum. */
 
-    /* DA-12: printed BEFORE the §6.4 sequence begins, not just before the
-     * connect call, so the operator sees feedback before the ~200 ms
-     * disarm/settle prelude. */
+    /* Print feedback before the full connection sequence begins, so the
+     * operator sees progress before the ~200ms settle time. */
     printf("Connecting to \"%s\"...\n", ssid);
 
     net_cli_connect_result_t result = { 0 };
@@ -133,8 +132,7 @@ static int cmd_wifi_connect_handler(int argc, char **argv)
         return 1;
     case NET_CLI_CONNECT_TIMEOUT:
     default:
-        /* DV-9: qualified rather than a bare "Timeout" -- DA-3 means the
-         * association is left untouched and may complete moments later. */
+        /* Timed out but did not disconnect; association may still complete. */
         printf("Timeout (association may still be completing - run ifconfig to check)\n");
         return 1;
     }

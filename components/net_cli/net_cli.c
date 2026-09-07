@@ -1,12 +1,22 @@
-/*
- * net_cli.c -- registration aggregator.
+/**
+ * @file net_cli.c
+ * @brief Central CLI initialization, command registration, and boot banner
  *
- * Implements net_cli_init() (thin wrapper over net_cli_wifi_state_init()),
- * net_cli_register_all() and net_cli_print_boot_banner(). net_cli_init()
- * and net_cli_print_boot_banner() are the only two of net_cli.h's four
- * public functions implemented here; net_cli_set_boot_status() is
- * implemented in net_cli_wifi_state.c, which is the sole owner of the
- * boot-status record it writes into (P-B4) -- see tech_spec.md §5.1.
+ * @author Nirmal Lad <nirmal.lad@acldigital.com>
+ * @date 2026-09-07
+ *
+ * @copyright Copyright (c) 2026 ACL Digital Pvt Ltd. All rights reserved.
+ *
+ * CONFIDENTIALITY NOTICE:
+ * This software and documentation are the confidential and proprietary
+ * information of ACL Digital Pvt Ltd. Unauthorized copying, distribution,
+ * modification, or reverse engineering of this file, via any medium,
+ * is strictly prohibited.
+ */
+
+/*
+ * Aggregates command registration, boot banner printing, and state
+ * initialization. The boot-status record is owned by net_cli_wifi_state.c.
  */
 #include <stdio.h>
 #include "esp_err.h"
