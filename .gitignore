@@ -95,3 +95,4 @@ sdkconfig.defaults.old
 
 # Local firmware-agent workitem state (not shared via git)
 .claude/workitem/
+docs/verification/
