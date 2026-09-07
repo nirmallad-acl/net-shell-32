@@ -1,0 +1,23 @@
+# net-shell-32 sdkconfig.defaults
+#
+# Every non-default Kconfig setting this feature relies on must be
+# reproducible from this file (sdkconfig itself is gitignored). See
+# tech_spec.md §6.3 for the full justification and source citations for
+# each value below.
+
+# --- target (HW-1) ---
+CONFIG_IDF_TARGET="esp32"
+
+# --- console transport (HW-4, HW-5) ---
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+CONFIG_ESP_CONSOLE_UART_BAUDRATE=115200
+
+# --- byte-exact prompt and plain-ASCII output (FR-13, NFR-6, NFR-7) ---
+# v6.0.2 already defaults LOG_COLORS to n; pinned so a menuconfig flip cannot
+# silently wrap the prompt in ANSI codes (see V6-3).
+CONFIG_LOG_COLORS=n
+
+# --- keep esp_log_level_set() effective at runtime (OQ-11 / §8.6) ---
+CONFIG_LOG_DYNAMIC_LEVEL_CONTROL=y
+CONFIG_LOG_MAXIMUM_LEVEL_INFO=y
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
