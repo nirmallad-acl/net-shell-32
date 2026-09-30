@@ -7,6 +7,7 @@
 idf_component_register(SRCS "main.c"
                        INCLUDE_DIRS "."
                        REQUIRES net_cli
+                                ble_ota
                                 console
                                 esp_wifi
                                 esp_netif
