@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project overview
 
-`net-shell-32` is an ESP-IDF firmware project targeting the ESP32. It is currently at the bare project-skeleton stage: the `main` component contains a single `main.c` with an empty `app_main()` and no other components have been added yet.
+`net-shell-32` is an ESP-IDF firmware project targeting the ESP32. It boots to a serial REPL (`esp32_net>` prompt, UART0) offering network commands (`ifconfig`, `wifiscan`, `wifi_connect`, `ping`) and a BLE OTA firmware upgrade command (`fwupgrade start|stop|status`).
 
 ## Build system
 
@@ -21,13 +21,21 @@ Common commands:
 
 There are no tests, lint configs, or CI in this repo yet.
 
-## Project structure
+## Architecture
 
-- `CMakeLists.txt` — top-level project file; includes `$IDF_PATH/tools/cmake/project.cmake` and declares the project name (`net-shell-32`)
-- `main/CMakeLists.txt` — registers the `main` IDF component (source files, include dirs); new source files added to `main/` must be added to the `SRCS` list here
-- `main/main.c` — entry point (`app_main`)
+- `main/main.c` — `app_main()` runs a *conditional* boot sequence (NVS, netif, event loop, Wi-Fi, CLI, BLE OTA init, REPL). A step runs only if its prerequisites succeeded; skipped steps record `NET_CLI_ERR_SKIPPED`. Boot is degraded-not-fatal, except console init/start failure, which halts.
+- `main/CMakeLists.txt` — declares an explicit `REQUIRES` list, which disables implicit dependency on all components. Every component used by `main.c` must be listed there, or the build fails with a misleading "header not found" error.
+- `components/net_cli` — Wi-Fi/network commands, one `cmd_*.c` per command, registered by `net_cli_register_all()`.
+- `components/ble_ota` — BLE (NimBLE) OTA with rollback and pairing. Layers: transport (`ble_ota_transport_nimble.c`), protocol (`ble_ota_proto*.c`), flash writer, health checks, `cmd_fwupgrade.c`. Tunables live in its `Kconfig`.
+- Component convention: public header in `include/` exposes only `<stdbool.h>` and `esp_err.h` types; everything else is in `private_include/`; all dependencies are `PRIV_REQUIRES`. Keep IDF types out of public headers. New source files must be added to the component's `SRCS`.
+- `main.c` must not need getters added to `net_cli`; boot-status facts for `ble_ota` health checks go through `ble_ota_note_boot_status()`.
 
-As functionality is added, new IDF components should generally live as sibling directories to `main/` (or under a `components/` directory), each with their own `CMakeLists.txt` calling `idf_component_register`.
+## Configuration
+
+- `sdkconfig.defaults` is the source of truth for non-default Kconfig values (`sdkconfig` is gitignored). Add new settings there, with justification comments.
+- `partitions.csv` — custom 4 MB dual-OTA layout (`ota_0`/`ota_1`, no factory app). App rollback is enabled: new images boot PENDING_VERIFY and must pass `ble_ota` health checks. Changing partition sizes affects OTA image limits.
+- Prompt output must stay plain ASCII: `CONFIG_LOG_COLORS=n` is pinned deliberately.
+- Workitem specs (`tech_spec.md`, requirement IDs such as FR-xxx cited in code comments) live in `.claude/workitem/<JIRA-ID>/`, not in git.
 
 ## Development environment
 
@@ -55,5 +63,6 @@ When creating a new branch for a JIRA/workitem ID (e.g. the firmware-agents `new
 
 - **Board:** ESP32 DevKit-C v1 (30-pin standard pinout)
 - **Module:** ESP32-WROOM-32
+- **Flash:** 4MB
 - **Console:** UART0 (115200 8N1) via Micro-USB (CH340G converter)
 - **Buttons:** Boot and EN (board-level, not firmware-controlled)

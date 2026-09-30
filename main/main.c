@@ -33,6 +33,7 @@
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "nvs_flash.h"
+#include "ble_ota.h"
 #include "net_cli.h"
 
 static const char *TAG = "main";
@@ -104,6 +105,17 @@ void app_main(void)
     /* Boot step 9: Publish boot status (by-value copy). */
     net_cli_set_boot_status(&st);
 
+    /* Boot step 9.5: BLE OTA component init (NETSHELL32-2, FR-101/FR-809).
+     * Never touches the BLE controller here; only creates this
+     * component's own sync primitives and evaluates the post-boot
+     * rollback/health state. A failure is logged and is NOT fatal to the
+     * rest of boot (degraded-boot philosophy, consistent with the other
+     * steps below). */
+    esp_err_t ble_ota_init_err = ble_ota_init();
+    if (ble_ota_init_err != ESP_OK) {
+        ESP_LOGE(TAG, "ble_ota_init failed (%s)", esp_err_to_name(ble_ota_init_err));
+    }
+
     /* Boot step 10: Set log levels (before REPL to avoid noisy output). */
     esp_log_level_set("wifi",               ESP_LOG_WARN);
     esp_log_level_set("wifi_init",          ESP_LOG_WARN);
@@ -148,12 +160,30 @@ void app_main(void)
         ESP_LOGE(TAG, "command registration failed (%s)", esp_err_to_name(reg_err));
     }
 
+    /* Boot step 13.5: Register "fwupgrade" (NETSHELL32-2, FR-901/902/904).
+     * A failure here must not prevent the REPL from starting or the
+     * other commands from registering. */
+    esp_err_t ble_ota_reg_err = ble_ota_register_all();
+    if (ble_ota_reg_err != ESP_OK) {
+        ESP_LOGE(TAG, "ble_ota command registration failed (%s)", esp_err_to_name(ble_ota_reg_err));
+    }
+
     /* Boot step 14: Print degraded-boot banner (if any boot steps failed).
      * Printed before REPL start to avoid race with the first prompt. */
     net_cli_print_boot_banner();
 
     /* Boot step 15: Start the REPL. */
     esp_err_t start_err = esp_console_start_repl(s_repl);
+
+    /* Boot step 15.5: Record boot-status facts for ble_ota's health
+     * checks H-1 (console/REPL up) and H-3 (Wi-Fi STA initialised,
+     * tech_spec.md §7.2). Recorded regardless of start_err so a REPL
+     * start failure is itself visible to H-1. NFR-303 forbids adding a
+     * getter to net_cli's private boot-status accessor, and net_cli.h
+     * exposes none, so this is the only source for these two facts. */
+    ble_ota_note_boot_status(st.wifi_init, st.wifi_set_mode, st.wifi_start,
+                              console_err, start_err);
+
     if (start_err != ESP_OK) {
         ESP_LOGE(TAG, "REPL start failed (%s); halting boot", esp_err_to_name(start_err));
         return;
