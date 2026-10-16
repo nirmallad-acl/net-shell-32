@@ -19,23 +19,24 @@ Common commands:
 - `idf.py fullclean` — remove the `build/` directory and configuration cache
 - `idf.py menuconfig` — interactive Kconfig configuration (writes `sdkconfig`, which is gitignored)
 
-There are no tests, lint configs, or CI in this repo yet.
+There are no tests or CI in this repo yet, and no README.md — this file is the only orientation doc. With no automated tests, verify changes with `idf.py build` (compile check) and, without hardware, by running the firmware in the QEMU devcontainer.
 
 ## Architecture
 
 - `main/main.c` — `app_main()` runs a *conditional* boot sequence (NVS, netif, event loop, Wi-Fi, CLI, BLE OTA init, REPL). A step runs only if its prerequisites succeeded; skipped steps record `NET_CLI_ERR_SKIPPED`. Boot is degraded-not-fatal, except console init/start failure, which halts.
 - `main/CMakeLists.txt` — declares an explicit `REQUIRES` list, which disables implicit dependency on all components. Every component used by `main.c` must be listed there, or the build fails with a misleading "header not found" error.
 - `components/net_cli` — Wi-Fi/network commands, one `cmd_*.c` per command, registered by `net_cli_register_all()`.
-- `components/ble_ota` — BLE (NimBLE) OTA with rollback and pairing. Layers: transport (`ble_ota_transport_nimble.c`), protocol (`ble_ota_proto*.c`), flash writer, health checks, `cmd_fwupgrade.c`. Tunables live in its `Kconfig`.
+- `components/ble_ota` — BLE (NimBLE) OTA with rollback and pairing. Layers: transport (`ble_ota_transport_nimble.c`), protocol (`ble_ota_proto*.c`), flash writer, health checks, `cmd_fwupgrade.c` (the `fwupgrade start|stop|status` command, in `components/ble_ota/`). Tunables live in its `Kconfig`.
 - Component convention: public header in `include/` exposes only `<stdbool.h>` and `esp_err.h` types; everything else is in `private_include/`; all dependencies are `PRIV_REQUIRES`. Keep IDF types out of public headers. New source files must be added to the component's `SRCS`.
-- `main.c` must not need getters added to `net_cli`; boot-status facts for `ble_ota` health checks go through `ble_ota_note_boot_status()`.
+- Layering rule: lower layers must never call back into `main.c` or the command layer; dependencies flow one way (`main` → components). This is why `main.c` must not need getters added to `net_cli`.
+- Boot-status facts for `ble_ota` health checks go through `ble_ota_note_boot_status()`.
 
 ## Configuration
 
 - `sdkconfig.defaults` is the source of truth for non-default Kconfig values (`sdkconfig` is gitignored). Add new settings there, with justification comments.
 - `partitions.csv` — custom 4 MB dual-OTA layout (`ota_0`/`ota_1`, no factory app). App rollback is enabled: new images boot PENDING_VERIFY and must pass `ble_ota` health checks. Changing partition sizes affects OTA image limits.
 - Prompt output must stay plain ASCII: `CONFIG_LOG_COLORS=n` is pinned deliberately.
-- Workitem specs (`tech_spec.md`, requirement IDs such as FR-xxx cited in code comments) live in `.claude/workitem/<JIRA-ID>/`, not in git.
+- Workitem specs (`tech_spec.md`, requirement IDs such as FR-xxx cited in code comments) live in `workitem/<JIRA-ID>-<feature-name>/`, not in git. The firmware-agents plugin uses `Workitem Root: workitem` because writes under `.claude/` always prompt for permission.
 
 ## Development environment
 
@@ -57,7 +58,7 @@ When creating a new branch for a JIRA/workitem ID (e.g. the firmware-agents `new
 
 - PR title: `<JIRA-ID>: <title>` (e.g. `NETSHELL32-1: Implement serial network CLI`).
 - PR body follows the template at `.github/PULL_REQUEST_TEMPLATE.md` — bold section labels **Description**, **JIRA**, **Documentation**, **Testing and Results** (the last including a test-case table with steps and Pass/Fail status, and a link to the raw test/log evidence). GitHub auto-fills this template for PRs opened via its UI; use `gh pr create --body-file .github/PULL_REQUEST_TEMPLATE.md` (then edit) when opening one via the CLI.
-- Never commit a raw log/output file containing a real credential (Wi-Fi password, token, etc.) — redact it first. Test-evidence logs referenced in a PR belong under `docs/verification/<JIRA-ID>/`, separate from any gitignored agent-internal working state.
+- Never commit a raw log/output file containing a real credential (Wi-Fi password, token, etc.) — redact it first. Test-evidence logs referenced in a PR belong under `docs/verification/<JIRA-ID>/` (`*.log` is gitignored except under `docs/verification/`), separate from any gitignored agent-internal working state.
 
 ## Target hardware
 
