@@ -1,0 +1,8 @@
+# ESP-IDF partition table -- net-shell-32, 4 MB flash (HW-6), dual OTA (BLD-2)
+# See .claude/workitem/NETSHELL32-2/tech_spec.md §4.1 for the full derivation.
+# Name,     Type, SubType, Offset,   Size,      Flags
+nvs,        data, nvs,     0x9000,   0x6000,
+otadata,    data, ota,     0xF000,   0x2000,
+phy_init,   data, phy,     0x11000,  0x1000,
+ota_0,      app,  ota_0,   0x20000,  0x1F0000,
+ota_1,      app,  ota_1,   0x210000, 0x1F0000,

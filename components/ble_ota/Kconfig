@@ -1,0 +1,171 @@
+menu "BLE OTA"
+
+    config BLE_OTA_MAX_CHUNK_SIZE
+        int "Maximum 0xFB data-chunk payload size (bytes)"
+        range 20 512
+        default 512
+        help
+            Compile-time ceiling on the chunkSize field of the 0xFF Set
+            Transfer Params command (FR-411). A declared chunkSize above
+            this value is rejected before entering RECEIVING, never
+            clamped. 512 matches an MTU-517 ATT write exactly
+            (tech_spec.md §5.2). This is what makes the per-part
+            reassembly buffer a true compile-time bound (NFR-105,
+            NFR-203).
+
+            A runtime floor also applies to the chunkSize actually
+            declared by the peer at 0xFF, independent of this Kconfig
+            ceiling: chunkSize is rejected if it would let a part of up to
+            BLE_OTA_MAX_PART_SIZE bytes require more than 256 chunks (the
+            fixed size of the per-part coverage bitmap), i.e. whenever
+            ceil(BLE_OTA_MAX_PART_SIZE / chunkSize) > 256. This is *not*
+            a fixed floor of 20 -- it scales with whatever
+            BLE_OTA_MAX_PART_SIZE is configured to, so a smaller
+            BLE_OTA_MAX_PART_SIZE raises the effective runtime floor
+            above 20 (tech_spec.md §5.4, FR-405, FR-411).
+
+    config BLE_OTA_MAX_PART_SIZE
+        int "Maximum part size / reassembly buffer size (bytes)"
+        range 4096 65536
+        default 65536
+        help
+            Bound on a single part's total byte length. 0xFC's partLen
+            field is 16-bit, so no legal part can exceed 65535 bytes
+            (Finding F-3, tech_spec.md §5.3); 65536 is a round 16 flash
+            sectors. This is the static size of the per-part reassembly
+            buffer (OQ-23, NFR-105, NFR-203) -- never a whole-image
+            buffer.
+
+    config BLE_OTA_FAST_MODE
+        bool "Enable fast/streamed transfer mode (experimental)"
+        default n
+        help
+            FR-602/FR-603: the fast/streamed transfer mode is optional
+            and MUST default to n. With this disabled, no fast-mode code
+            or state is present in the binary. Slow/request-driven mode
+            (FR-601) is always compiled in regardless of this setting.
+            Fast mode is not validated in Phase 4/6 (tech_spec.md §5.7).
+
+    config BLE_OTA_INACTIVITY_TIMEOUT_S
+        int "Transfer inactivity timeout (seconds)"
+        default 30
+        help
+            FR-705, OQ-13. If no valid protocol frame arrives within this
+            window while a transfer is in progress (SIZE_SET/PARAMS_SET/
+            RECEIVING only -- never COMMITTING/INSTALLING), the transfer
+            aborts. tech_spec.md §7.1.
+
+    config BLE_OTA_HEALTH_MIN_UPTIME_S
+        int "Minimum uptime before an image may be marked valid (seconds)"
+        default 30
+        help
+            FR-802(a), OQ-13. tech_spec.md §7.1.
+
+    config BLE_OTA_HEALTH_DEADLINE_S
+        int "Health-verification deadline (seconds)"
+        default 120
+        help
+            FR-805, OQ-13. If the FR-802/803 conjunction is not satisfied
+            by this deadline, rollback is actively triggered. tech_spec.md
+            §7.1.
+
+    config BLE_OTA_HEALTH_MIN_FREE_HEAP_KB
+        int "Minimum free internal heap for a healthy image (KiB)"
+        default 40
+        help
+            FR-804 health check H-5. tech_spec.md §7.2.
+
+    config BLE_OTA_READVERTISE_WINDOW_S
+        int "Auto re-advertise window after a disconnect (seconds)"
+        default 300
+        help
+            FR-204, OQ-9. Advertising auto-resumes after a mid-transfer
+            disconnect for this long, then stops until a fresh
+            "fwupgrade start". tech_spec.md §11 OQ-9.
+
+    config BLE_OTA_REBOOT_DELAY_MS
+        int "Delay between the 0x0F success notification and reboot (ms)"
+        default 1000
+        help
+            OQ-20, AC-4. tech_spec.md §7.4.
+
+    config BLE_OTA_SUSPEND_WIFI
+        bool "Suspend Wi-Fi STA during an active OTA transfer"
+        default y
+        help
+            NFR-304, NFR-302, OQ-15 (corrected, post-Gate-2 scope). Wi-Fi
+            STA is suspended (disconnect + stop) only for the duration of
+            an active transfer -- from transfer-begin (0xFD/EVT_BEGIN) to
+            transfer-end (success, finalize-failure, or abort) -- and
+            restored automatically at transfer-end. "fwupgrade start"
+            itself (BLE bring-up + advertising, before any client begins
+            transferring data) does NOT suspend Wi-Fi. See
+            requirements.md's Gate 2 amendment and tech_spec.md §11 OQ-15.
+
+    config BLE_OTA_ERASE_BONDS_ON_START
+        bool "Erase existing BLE bonds on every fwupgrade start"
+        default n
+        help
+            OQ-18. Default is to reuse existing bonds (bonds persist
+            across an OTA reboot, OQ-4). tech_spec.md §11 OQ-18.
+
+    config BLE_OTA_REPORT_REJECT_VIA_0X0F
+        bool "Report rejected commands via the 0x0F OTA Result notification"
+        default y
+        help
+            FR-411 residual, §8. When enabled, a rejected command (bad
+            length, out-of-sequence opcode, oversized chunk, etc.) is
+            answered with a free-form 0x0F text in addition to the
+            WARN/ERROR log line. Disable to fall back to silent-refusal
+            plus log only, if the real Android app is found to mishandle
+            an early 0x0F (tech_spec.md §8 residual risk).
+
+    config BLE_OTA_ROLLBACK_LOOP_LIMIT
+        int "Rollback count before the class-D lenient escape applies"
+        default 2
+        help
+            OQ-19. Applies only when every failed health check is class D
+            (H-2/H-3/H-5) -- tech_spec.md §7.3.1.
+
+    config BLE_OTA_ROLLBACK_HARD_LIMIT
+        int "Absolute rollback ceiling for class-R failures"
+        default 8
+        help
+            OQ-19, NFR-101. Defence-in-depth only: a class-R failure
+            (H-1/H-4) is never marked valid regardless of this counter
+            (RB-INV) -- tech_spec.md §7.3.1.
+
+    config BLE_OTA_DRAIN_TIMEOUT_MS
+        int "ABORTING_DRAIN watchdog (ms)"
+        default 3000
+        help
+            tech_spec.md §5.9.6. Set below both the 5 s task WDT and the
+            4 s BLE supervision timeout so FWUPG_DRAIN_TIMEOUT is
+            diagnostic, not posthumous.
+
+    config BLE_OTA_VERBOSE_CHUNK_LOG
+        bool "Compile in per-chunk/per-frame DEBUG and VERBOSE logging"
+        default n
+        help
+            tech_spec.md §4.2.1 (verification step V-1) / §9. Only needs
+            enabling if V-1 shows the optimiser leaves per-chunk DEBUG /
+            VERBOSE format strings linked into .rodata despite
+            CONFIG_LOG_MAXIMUM_LEVEL_INFO. Leave n for production builds.
+
+    config BLE_OTA_WORKER_TASK_STACK
+        int "Flash worker task stack size (bytes)"
+        default 4096
+        help
+            NFR-201, NFR-204. Initial value; resize from the measured
+            high-water mark once available.
+
+    config BLE_OTA_WORKER_TASK_PRIO
+        int "Flash worker task priority"
+        default 4
+        help
+            NFR-204. Above the REPL (2) so a transfer is never starved by
+            console I/O; far below the BLE host/controller (21/23) so
+            radio timing is never delayed by flash work. tech_spec.md
+            §3.4.
+
+endmenu
