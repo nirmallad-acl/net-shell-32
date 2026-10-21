@@ -87,7 +87,6 @@ void app_main(void)
         st.wifi_init = esp_wifi_init(&wifi_cfg);
     } else {
         st.wifi_init = NET_CLI_ERR_SKIPPED;
-    }
 
     /* Boot step 6: Wi-Fi mode (depends on wifi_init) */
     st.wifi_set_mode = (st.wifi_init == ESP_OK) ? esp_wifi_set_mode(WIFI_MODE_STA)
