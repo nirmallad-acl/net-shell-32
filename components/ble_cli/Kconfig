@@ -1,0 +1,43 @@
+menu "BLE CLI"
+
+    config BLE_CLI_TX_QUEUE_DEPTH
+        int "Response lines buffered for transmission"
+        range 4 16
+        default 8
+        help
+            REQ-PERF-04. Depth of the static TX queue (each item holds one whole
+            response line of up to 128 bytes, about 136 bytes of .bss per slot).
+
+    config BLE_CLI_CMD_QUEUE_DEPTH
+        int "Parsed commands buffered for the worker"
+        range 2 8
+        default 4
+        help
+            Items are 12-byte parse results, not text. A burst beyond this depth
+            sets the input-overflow latch and yields one ERR busy
+            reason=input_overflow (tech_spec.md 2.5.2).
+
+    config BLE_CLI_WORKER_STACK
+        int "CLI worker task stack (bytes)"
+        default 4096
+        help
+            REQ-MEM-04. Initial value; resize from the measured STACK_HWM.
+            Allocated on the heap once at init.
+
+    config BLE_CLI_WORKER_PRIO
+        int "CLI worker task priority"
+        range 1 10
+        default 3
+        help
+            Below the accel session task (4), above the REPL (2).
+
+    config BLE_CLI_DEBUG_TX_LOG
+        bool "Log BLECLI_TX / BLECLI_TX_SUPPRESS lines (debug builds only)"
+        default n
+        help
+            REQ-FUNC-61 verification aid: one line per transmitted or suppressed
+            response line, with its length only, never its content (REQ-SEC-04).
+            Leave n in production builds (test/configs/debug_tx.defaults sets it
+            for the test image).
+
+endmenu

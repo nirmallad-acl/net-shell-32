@@ -1,0 +1,13 @@
+# TEST-ONLY sdkconfig fragment (never shipped): the NETSHELL32-5 build-test hooks of
+# test_plan.md section 5. Enable ONE of the first two per image as needed.
+#
+#   NS5_TEST_FAIL_HOST_INIT  H-8: ble_host_start() fails before touching the radio (TC-INT-01)
+#   NS5_TEST_STALL_HOST      H-10: registers "ns5_stall <ms>" (TC-REB-05, V-10)
+#   NS5_TEST_AUTORUN         H-11 fallback: runs a command list through the console after boot
+#
+# Example for TC-REB-05:
+#   idf.py -B build-test -DSDKCONFIG=build-test/sdkconfig \
+#       -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;test/configs/ns5_hooks.defaults" build
+CONFIG_NS5_TEST_STALL_HOST=y
+# CONFIG_NS5_TEST_FAIL_HOST_INIT is not set
+# CONFIG_NS5_TEST_AUTORUN is not set

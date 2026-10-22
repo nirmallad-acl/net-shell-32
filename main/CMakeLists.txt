@@ -8,6 +8,11 @@ idf_component_register(SRCS "main.c"
                        INCLUDE_DIRS "."
                        REQUIRES net_cli
                                 ble_ota
+                                ble_host
+                                ble_cli
+                                diag_cmds
+                                accel_sensor
+                                device_info
                                 console
                                 esp_wifi
                                 esp_netif

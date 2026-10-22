@@ -55,3 +55,40 @@ CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
 # (FR-304, OQ-4), with a bounded/documented capacity (FR-304). ---
 CONFIG_BT_NIMBLE_NVS_PERSIST=y
 CONFIG_BT_NIMBLE_MAX_BONDS=4
+
+# =====================================================================
+# NETSHELL32-5: BLE UART CLI, device diagnostics and ADXL345 support
+# See workitem/NETSHELL32-5-ble-uart-cli-adxl345/tech_spec.md section 2.12.
+# =====================================================================
+
+# --- radio pinned even where equal to the IDF default (REQ-BLD-03) ---
+# BLE-only controller
+CONFIG_BTDM_CTRL_MODE_BLE_ONLY=y
+# Wi-Fi/BT software coexistence (REQ-HW-09)
+CONFIG_ESP_COEX_SW_COEXIST_ENABLE=y
+# Controller connection slots match CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1 (about 1 KiB static DRAM each)
+CONFIG_BTDM_CTRL_BLE_MAX_CONN=1
+# NimBLE host task is now always on; size pinned, to be resized from STACK_HWM (REQ-MEM-04)
+CONFIG_BT_NIMBLE_HOST_TASK_STACK_SIZE=4096
+
+# --- security: SC pairing compiled in (OQ-03); the app handles REPEAT_PAIRING
+# itself (REQ-FUNC-80(b)) ---
+CONFIG_BT_NIMBLE_SECURITY_ENABLE=y
+CONFIG_BT_NIMBLE_SM_SC=y
+CONFIG_BT_NIMBLE_HANDLE_REPEAT_PAIRING_DELETION=n
+
+# --- firmware version comes only from version.txt (REQ-FUNC-24) ---
+CONFIG_APP_PROJECT_VER_FROM_CONFIG=n
+CONFIG_APP_EXCLUDE_PROJECT_VER_VAR=n
+
+# --- ble_host_start() (nimble_port_init + GATT registration) now runs on the
+# main task after the REPL starts (ADV-BOOT-14); NETSHELL32-2 ran it on the
+# 8 KiB REPL task. Transient: the main task stack is freed when app_main()
+# returns, so there is no steady-state cost. ---
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=6144
+
+# --- I2C master ISR stays in flash: IRAM headroom is only 8,961 B (baseline
+# (c)) and the ISR is not IRAM-safe anyway (I2C_ISR_IRAM_SAFE=n), so IRAM
+# placement buys nothing (ADV-NEW-04) ---
+CONFIG_I2C_ISR_IRAM_SAFE=n
+CONFIG_I2C_MASTER_ISR_HANDLER_IN_IRAM=n

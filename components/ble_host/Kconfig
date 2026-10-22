@@ -1,0 +1,70 @@
+menu "BLE Host (shared NimBLE owner)"
+
+    config BLE_HOST_DEVICE_NAME
+        string "GAP / advertised device name (max 10 characters)"
+        default "NETSHELL32"
+        help
+            REQ-FUNC-78. Used for the GAP device name and the Complete Local
+            Name in the scan response. Kconfig strings carry no length range,
+            so ble_host.c enforces 10 characters with a _Static_assert: when
+            the OTA service is armed the scan response holds 2 + name + 18
+            bytes and must fit 31 bytes.
+
+    config BLE_HOST_MAX_CLIENTS
+        int "Maximum number of GATT clients that may register"
+        range 2 4
+        default 2
+        help
+            REQ-FUNC-71. Capacity of the compile-time registration table.
+            Today: ble_ota and ble_cli.
+
+    config BLE_HOST_EXEC_TIMEOUT_MS
+        int "Total ble_host_exec() bound used by OTA arm/disarm (ms)"
+        range 500 2000
+        default 1000
+        help
+            One deadline covering the exec mutex take, the wait for the
+            function to start and the 350 ms completion window
+            (tech_spec.md 2.3.5). Sized against the worst-case OTA RX
+            callback W_OTA of about 350 ms (tech_spec.md 2.4.9).
+
+    config BLE_HOST_ADV_RETRY_MAX_S
+        int "Advertising restart retry ceiling (s)"
+        range 5 300
+        default 30
+        help
+            On an advertising start failure the host retries after 1, 2, 4,
+            8 and 16 s, then every this many seconds (REQ-REL-03).
+
+    config BLE_HOST_INITIATE_SECURITY
+        bool "Request pairing from the peripheral as soon as a peer connects"
+        default y
+        help
+            REQ-FUNC-65. Fallback for the R-02 risk: if the existing OTA
+            app misbehaves with peripheral-initiated security, set this to
+            n. The CLI still works, because its RX characteristic requires
+            an encrypted link and Android pairs on the first write. If
+            the fallback is taken, REQ-FUNC-65's "no manual bond step" pass
+            criterion is NOT met as written and must be accepted by the
+            user (record the deviation in docs/ble_cli.md).
+
+    config BLE_HOST_SECURE_DEADLINE_S
+        int "Terminate a link that is not encrypted and bonded after (s)"
+        range 10 120
+        default 60
+        help
+            Counted from the connection (and from a secure-to-insecure
+            change). A fixed bound, not SMP-progress-aware: a pairing that
+            starts after about this long minus a few seconds is cut. The
+            default 60 s was confirmed at Gate 2 (G2-09), tech_spec.md 2.3.9.
+
+    config BLE_HOST_SEC_INITIATE_RETRIES
+        int "Retries of a failed ble_gap_security_initiate()"
+        range 0 3
+        default 1
+        help
+            Each retry is made after 2 s while the link generation is
+            unchanged and the link is still not secure. The secure deadline
+            applies regardless.
+
+endmenu

@@ -1,0 +1,7 @@
+# TEST-ONLY sdkconfig fragment (never shipped): shortens the OTA re-advertise window
+# so REQ-FUNC-79 (window expiry disarms OTA, advertising continues) can be observed
+# on the DevKit in 30 s instead of 300 s (TC-OTA-07, V-09).
+#
+#   idf.py -B build-test -DSDKCONFIG=build-test/sdkconfig \
+#       -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;test/configs/readv30.defaults" build
+CONFIG_BLE_OTA_READVERTISE_WINDOW_S=30

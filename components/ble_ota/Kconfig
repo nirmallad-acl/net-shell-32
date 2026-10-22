@@ -79,9 +79,12 @@ menu "BLE OTA"
         int "Auto re-advertise window after a disconnect (seconds)"
         default 300
         help
-            FR-204, OQ-9. Advertising auto-resumes after a mid-transfer
-            disconnect for this long, then stops until a fresh
-            "fwupgrade start". tech_spec.md §11 OQ-9.
+            FR-204, OQ-9. After a disconnect while OTA is armed, OTA stays
+            armed for this long, then OTA is DISARMED until a fresh
+            "fwupgrade start". NETSHELL32-5: advertising itself never
+            stops (the BLE CLI stays discoverable); only the OTA arm
+            state and the advertised OTA UUID go away. tech_spec.md §11
+            OQ-9, NETSHELL32-5 tech_spec.md 2.4.3.
 
     config BLE_OTA_REBOOT_DELAY_MS
         int "Delay between the 0x0F success notification and reboot (ms)"
@@ -108,6 +111,10 @@ menu "BLE OTA"
         help
             OQ-18. Default is to reuse existing bonds (bonds persist
             across an OTA reboot, OQ-4). tech_spec.md §11 OQ-18.
+            NETSHELL32-5: MUST stay n. The bond store is now shared with
+            the BLE CLI and the host is up from boot, so erasing it on
+            "fwupgrade start" would drop the CLI peer's bond; enabling it
+            fails the build with an #error (REQ-BLD-04).
 
     config BLE_OTA_REPORT_REJECT_VIA_0X0F
         bool "Report rejected commands via the 0x0F OTA Result notification"
