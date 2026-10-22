@@ -13,8 +13,9 @@
  * modification, or reverse engineering of this file, via any medium,
  * is strictly prohibited.
  *
- * FR-901..909: registered on the existing shared esp_console REPL. Owns
- * the "fwupgrade start" ordered bring-up / unwind (FR-102).
+ * FR-901..909: registered on the existing shared esp_console REPL. NETSHELL32-5:
+ * "start" ARMS the OTA service (the BLE host is owned by ble_host and is up from
+ * boot) and "stop" DISARMS it; neither starts or stops BLE (tech_spec.md 2.4.6).
  *
  * tech_spec.md §6.7 (r3, authoritative): Wi-Fi suspension is one-way and
  * never automatically restored. wifi_suspend_hook() below is called by
@@ -128,20 +129,50 @@ static void wifi_suspend_hook(void)
 }
 #endif /* CONFIG_BLE_OTA_SUSPEND_WIFI */
 
+/* One string constant for the stuck-drain operator text; also used verbatim in
+ * docs/ble_cli.md (tech_spec.md 2.4.6, G2-07). */
+#define DRAIN_STUCK_HINT "reset the device: run 'reboot' (serial or BLE CLI) or press EN"
+
+static int refuse_start(const char *text, const char *outcome)
+{
+    printf("fwupgrade: cannot start -- %s\n", text);
+    ESP_LOGW(TAG, "FWUPG_CMD cmd=start outcome=%s", outcome);
+    return 1;
+}
+
 static int do_start(void)
 {
     /* tech_spec.md §10.4(2): console commands are commands too -- each
      * logs its invocation and its outcome. */
     ESP_LOGI(TAG, "FWUPG_CMD cmd=start state=invoked");
 
-    if (ble_ota_transport_is_running()) {
+    bool peer = false;
+    esp_err_t ferr = ESP_OK;
+    switch (ble_ota_transport_arm(&peer, &ferr)) {
+    case OTA_ARM_OK:
+        printf("fwupgrade: started (armed) peer_connected=%d\n", peer ? 1 : 0);
+        ESP_LOGI(TAG, "FWUPG_CMD cmd=start outcome=ok");
+        return 0;
+
+    case OTA_ARM_ALREADY_RUNNING:
         /* FR-905: explicit "already running" error, never a double-init. */
         printf("fwupgrade: already running\n");
         ESP_LOGW(TAG, "FWUPG_CMD cmd=start outcome=already_running");
         return 1;
-    }
 
-    if (ble_ota_health_is_pending_verify()) {
+    case OTA_ARM_BUSY:
+        return refuse_start("a previous stop is still in progress", "busy");
+
+    case OTA_ARM_HOST_STARTING:
+        return refuse_start("BLE host is still starting, retry in a few seconds", "host_starting");
+
+    case OTA_ARM_HOST_UNAVAILABLE:
+        return refuse_start("BLE host is not available (see BLECLI_HOST_FAIL)", "host_unavailable");
+
+    case OTA_ARM_NOT_REGISTERED:
+        return refuse_start("OTA service is not registered (see FWUPG_REGISTER_FAIL)", "ota_not_registered");
+
+    case OTA_ARM_PENDING_VERIFY: {
         uint32_t remaining = ble_ota_health_remaining_deadline_s();
         printf("fwupgrade: cannot start -- device is in post-update health verification\n");
         printf("fwupgrade:   running image is PENDING_VERIFY; OTA is unavailable until it is validated\n");
@@ -156,33 +187,30 @@ static int do_start(void)
         return 1;
     }
 
-    esp_err_t err = ble_ota_flash_start();
-    if (err != ESP_OK) {
-        printf("fwupgrade: failed to start flash worker (%s)\n", esp_err_to_name(err));
-        ESP_LOGE(TAG, "FWUPG_CMD cmd=start outcome=flash_start_failed err=%s", esp_err_to_name(err));
+    case OTA_ARM_FLASH_FAIL:
+        printf("fwupgrade: failed to start flash worker (%s)\n", esp_err_to_name(ferr));
+        ESP_LOGE(TAG, "FWUPG_CMD cmd=start outcome=flash_start_failed err=%s", esp_err_to_name(ferr));
+        return 1;
+
+    case OTA_ARM_HOST_TIMEOUT:
+        return refuse_start("BLE host did not respond", "host_timeout");
+
+    case OTA_ARM_RES_DRAIN_STUCK:
+        printf("fwupgrade: cannot start -- previous OTA drain is stuck; %s (see FWUPG_DRAIN_TIMEOUT)\n",
+               DRAIN_STUCK_HINT);
+        ESP_LOGW(TAG, "FWUPG_CMD cmd=start outcome=drain_stuck");
+        return 1;
+
+    default:
+        printf("fwupgrade: cannot start -- internal error\n");
+        ESP_LOGW(TAG, "FWUPG_CMD cmd=start outcome=internal");
         return 1;
     }
-
-    err = ble_ota_transport_start();
-    if (err != ESP_OK) {
-        /* FR-102: abort on first failure, unwind everything already done. */
-        ble_ota_flash_stop();
-        if (err == ESP_ERR_BLE_OTA_PENDING_VERIFY) {
-            printf("fwupgrade: cannot start -- device is in post-update health verification\n");
-        } else {
-            printf("fwupgrade: BLE bring-up failed (%s)\n", esp_err_to_name(err));
-        }
-        ESP_LOGE(TAG, "FWUPG_CMD cmd=start outcome=ble_bringup_failed err=%s", esp_err_to_name(err));
-        return 1;
-    }
-
-    printf("fwupgrade: started (advertising)\n");
-    ESP_LOGI(TAG, "FWUPG_CMD cmd=start outcome=ok");
-    return 0;
 }
 
-/* tech_spec.md §6.7.5 (binding): "fwupgrade stop" tears the BLE stack
- * down (FR-103) and nothing more -- it must NEVER restore Wi-Fi. This is
+/* tech_spec.md §6.7.5 (binding): "fwupgrade stop" disarms OTA (NETSHELL32-5; in
+ * NETSHELL32-2 it tore the BLE stack down, FR-103) and nothing more -- it must NEVER
+ * restore Wi-Fi. This is
  * explicitly called out as the single most likely place for an
  * implementer or reviewer to "helpfully" add a restore call; doing so
  * re-creates code_review.md MAJOR-4 verbatim, since this handler runs on
@@ -192,67 +220,88 @@ static int do_stop(void)
 {
     ESP_LOGI(TAG, "FWUPG_CMD cmd=stop state=invoked");
 
-    if (!ble_ota_transport_is_running()) {
+    /* NETSHELL32-5: "stop" now DISARMS OTA only. The BLE host and the CLI stay up
+     * (REQ-INT-01), and the link is released only if it is OTA-only (REQ-FUNC-76).
+     * The abort is issued on the host task in the same step that closes the gate;
+     * the drain (ble_ota_proto_wait_idle, bounded by the drain timeout of tech_spec
+     * §5.9.6, then ble_ota_flash_stop) is owned by exactly one task, decided by a CAS
+     * (ble_ota_transport_disarm). The flash worker is never force-deleted while a
+     * flash operation is draining (Phase 5 review CRITICAL-2 is preserved). */
+    ble_ota_disarm_result_t r = ble_ota_transport_disarm();
+    switch (r.kind) {
+    case OTA_DISARM_OK:
+        printf("fwupgrade: stopped\n");
+        ESP_LOGI(TAG, "FWUPG_CMD cmd=stop outcome=ok");
+        return 0;
+
+    case OTA_DISARM_NOT_RUNNING:
         /* FR-906: no error escalation, no crash. */
         printf("fwupgrade: not running\n");
         ESP_LOGI(TAG, "FWUPG_CMD cmd=stop outcome=not_running");
         return 0;
-    }
 
-    esp_err_t err = ble_ota_transport_stop();
-    if (err != ESP_OK) {
-        printf("fwupgrade: BLE teardown reported %s (continuing cleanup)\n", esp_err_to_name(err));
-    }
+    case OTA_DISARM_BUSY:
+        printf("fwupgrade: a start or stop is in progress\n");
+        ESP_LOGW(TAG, "FWUPG_CMD cmd=stop outcome=busy");
+        return 1;
 
-    /* Phase 5 review CRITICAL-2 fix: ble_ota_transport_stop() above only
-     * *requests* the L2/L3 abort (tech_spec.md §5.9) -- it does not wait
-     * for the flash worker to actually release ownership of the
-     * reassembly buffer / OTA handle. Force-deleting the worker task
-     * (ble_ota_flash_stop()) before that handoff completes is exactly the
-     * "buffer/task torn out from under an in-flight esp_ota_write()" race
-     * §5.9's ABORTING_DRAIN state exists to prevent -- it must never
-     * happen via this path either. Wait (bounded by the same drain
-     * timeout §5.9.6 already defines) for the state machine to actually
-     * reach IDLE before touching the worker task. */
-    if (!ble_ota_proto_wait_idle(CONFIG_BLE_OTA_DRAIN_TIMEOUT_MS)) {
-        ESP_LOGE(TAG, "fwupgrade stop: drain did not complete within %d ms; "
-                       "refusing to force-stop the flash worker task",
-                 CONFIG_BLE_OTA_DRAIN_TIMEOUT_MS);
-        printf("fwupgrade: BLE stopped, but a flash operation is still draining -- "
-               "the worker task was left running; a device reset is required "
-               "(see FWUPG_DRAIN_TIMEOUT in the log)\n");
-        ESP_LOGE(TAG, "FWUPG_CMD cmd=stop outcome=drain_stuck");
+    case OTA_DISARM_IN_PROGRESS:
+        printf("fwupgrade: a stop is already in progress (reason=%s)\n", r.reason);
+        ESP_LOGW(TAG, "FWUPG_CMD cmd=stop outcome=busy");
+        return 1;
+
+    case OTA_DISARM_HOST_TIMEOUT:
+        printf("fwupgrade: BLE host did not respond; OTA is still armed\n");
+        ESP_LOGW(TAG, "FWUPG_CMD cmd=stop outcome=host_timeout");
+        return 1;
+
+    case OTA_DISARM_DRAIN_STUCK:
+    default:
+        printf("fwupgrade: OTA disarmed, but a flash operation is still draining -- "
+               "the worker task was left running; %s (see FWUPG_DRAIN_TIMEOUT in the log)\n",
+               DRAIN_STUCK_HINT);
+        ESP_LOGW(TAG, "FWUPG_CMD cmd=stop outcome=drain_stuck");
         return 1;
     }
-
-    ble_ota_flash_stop();
-    printf("fwupgrade: stopped\n");
-    ESP_LOGI(TAG, "FWUPG_CMD cmd=stop outcome=ok");
-    return 0;
 }
 
 static int do_status(void)
 {
     ESP_LOGI(TAG, "FWUPG_CMD cmd=status state=invoked");
-    bool running = ble_ota_transport_is_running();
+    /* Read only: atomics and the existing protocol getters; never ble_host_exec.
+     * "ble:", "advertising:", "connected:" and "bonded:" now describe the shared
+     * host and link (documented change, REQ-INT-04). */
+    ble_ota_transport_status_t st = { 0 };
+    (void)ble_ota_transport_get_status(&st);
     printf("fwupgrade status:\n");
-    printf("  ble: %s\n", running ? "up" : "down");
+    printf("  ble: %s\n", st.host_up ? "up" : (st.host_starting ? "starting" : "down"));
 
-    if (running) {
-        ble_ota_transport_status_t st = { 0 };
-        if (ble_ota_transport_get_status(&st) == ESP_OK) {
-            printf("  advertising: %s\n", st.advertising ? "yes" : "no");
-            printf("  connected: %s%s%s\n", st.connected ? "yes (" : "no",
-                   st.connected ? st.peer_addr_str : "", st.connected ? ")" : "");
-            printf("  bonded: %s\n", st.bonded ? "yes" : "no");
-        }
+    const char *armed_txt = "no";
+    switch (st.arm_state) {
+    case OTA_ARM_ARMED:       armed_txt = "yes"; break;
+    case OTA_ARM_ARMING:      armed_txt = "arming"; break;
+    case OTA_ARM_ABORTED:     /* shown as disarming */
+    case OTA_ARM_DISARMING:   armed_txt = "disarming"; break;
+    case OTA_ARM_DRAIN_STUCK: armed_txt = "drain_stuck"; break;
+    default:                  armed_txt = "no"; break;
+    }
+    printf("  armed: %s\n", armed_txt);
+    printf("  adv mode: %s\n", st.adv_mode_armed ? "armed" : "disarmed");
+    printf("  advertising: %s\n", st.advertising ? "yes" : "no");
+    printf("  connected: %s%s%s\n", st.connected ? "yes (" : "no", st.connected ? st.peer_addr_str : "",
+           st.connected ? ")" : "");
+    printf("  bonded: %s\n", st.bonded ? "yes" : "no");
+    printf("  peer_connected: %s\n", st.connected ? "yes" : "no");
+    printf("  cli_engaged: %s\n", st.cli_engaged ? "yes" : "no");
+    printf("  ota_registered: %s\n", st.registered ? "yes" : "no");
+    if (st.registered) {
         printf("  transfer state: %s\n", ble_ota_proto_state_name());
         uint32_t recv = 0, declared = 0;
         ble_ota_proto_get_progress(&recv, &declared);
         printf("  bytes received: %" PRIu32 "/%" PRIu32 "\n", recv, declared);
-        if (ble_ota_proto_is_drain_stuck()) {
-            printf("  drain: stuck -- requires a reset (see FWUPG_DRAIN_TIMEOUT in the log)\n");
-        }
+    }
+    if (st.arm_state == OTA_ARM_DRAIN_STUCK || ble_ota_proto_is_drain_stuck()) {
+        printf("  drain: stuck -- %s\n", DRAIN_STUCK_HINT);
     }
 #if CONFIG_BLE_OTA_SUSPEND_WIFI
     /* tech_spec.md §6.7.5: no "auto-restore" framing -- the suspension,

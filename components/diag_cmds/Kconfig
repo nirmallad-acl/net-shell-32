@@ -1,0 +1,40 @@
+menu "Diagnostics commands (serial and BLE)"
+
+    config DIAG_REBOOT_GUARD_TIMEOUT_MS
+        int "Reboot guard total timeout (ms)"
+        range 500 1200
+        default 1000
+        help
+            REQ-FUNC-29/31, tech_spec.md 2.4.4. Total bound of the
+            ble_host_exec() round trip that atomically checks "no OTA in
+            flight". 350 ms of it is the completion window; the rest is the
+            window for the host task to start the check, sized against the
+            worst-case OTA RX callback of about 350 ms. The 1200 ms cap
+            keeps esp_restart() within 1440 ms of the command, inside the
+            1.5 s bound.
+
+    config DIAG_REBOOT_ACK_WAIT_MS
+        int "Maximum wait for the reboot acknowledgement to leave the device (ms)"
+        range 100 1000
+        default 1000
+        help
+            OQ-12. The actual wait is further limited by the single
+            command deadline (command time + 1410 ms).
+
+    config DIAG_ACCEL_TASK_STACK
+        int "accel_xyz session task stack (bytes)"
+        default 3072
+        help
+            REQ-MEM-04. Initial value; resize from the measured STACK_HWM.
+            Allocated on the heap once at init.
+
+    config DIAG_ACCEL_TASK_PRIO
+        int "accel_xyz session task priority"
+        range 1 10
+        default 4
+        help
+            Above the BLE CLI worker (3) so slot deadlines are not delayed
+            by response handling, below the BLE host (21) and controller (23).
+            REQ-PERF-02.
+
+endmenu

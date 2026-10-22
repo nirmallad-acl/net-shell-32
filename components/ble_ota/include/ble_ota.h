@@ -15,7 +15,8 @@
  */
 
 /*
- * This is the entire public surface: three functions. No NimBLE,
+ * This is the entire public surface: four functions (the reboot guard of
+ * NETSHELL32-5 is the fourth, declared below). No NimBLE,
  * esp_ota_*, Wi-Fi or FreeRTOS types leak here -- everything a
  * command/layer implementation needs beyond this lives in
  * private_include/ (NFR-402). All dependencies of this component are
@@ -35,6 +36,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stdint.h>
 #include "esp_err.h"
 
 #ifdef __cplusplus
@@ -47,9 +49,11 @@ extern "C" {
  * ESP_OTA_IMG_PENDING_VERIFY, arms the health-confirmation timer
  * (tech_spec.md §7.3); otherwise logs FWUPG_BOOT and does nothing else.
  *
- * Does NOT touch the BLE controller or host (FR-101) -- BLE bring-up
- * happens only on "fwupgrade start". Idempotent: a second call returns
- * ESP_ERR_INVALID_STATE and changes nothing.
+ * Does NOT touch the BLE controller or host (FR-101). NETSHELL32-5: the NimBLE
+ * host is owned by the ble_host component and is brought up by main.c as the
+ * last boot step; this call only REGISTERS the OTA GATT service with it (at
+ * most once per boot) and "fwupgrade start|stop" merely arm/disarm OTA.
+ * Idempotent: a second call returns ESP_ERR_INVALID_STATE and changes nothing.
  *
  * MUST be called once during boot, before ble_ota_register_all(). A
  * failure is logged; the caller (main.c) MUST NOT treat it as fatal to
@@ -74,6 +78,26 @@ void ble_ota_note_boot_status(esp_err_t wifi_init,
                                esp_err_t wifi_start,
                                esp_err_t console_new_repl,
                                esp_err_t console_start_repl);
+
+/* ---- NETSHELL32-5: reboot guard (tech_spec.md 2.2.6, 2.4.4) ---- */
+#define ESP_ERR_BLE_OTA_REBOOT_OTA_ACTIVE     (0xB000 + 12)
+#define ESP_ERR_BLE_OTA_REBOOT_PENDING_VERIFY (0xB000 + 13)
+#define ESP_ERR_BLE_OTA_REBOOT_STALE          (0xB000 + 14) /* BLE generation no longer current+secure */
+
+/* Atomically (with respect to OTA RX on the BLE host task): if ble_gen != 0 and
+ * ble_gen is not the current generation of a secure link -> ..._STALE; else if the
+ * OTA protocol is not IDLE and the drain is not stuck (G2-07) -> ..._OTA_ACTIVE;
+ * else if the running image is PENDING_VERIFY -> ..._PENDING_VERIFY; else commit:
+ * from now until restart every OTA RX write is rejected and nothing can move the
+ * protocol out of IDLE.
+ * ble_gen = 0 means "serial request, no link precheck"; != 0 means "BLE request".
+ * ESP_OK = committed, and the caller MUST restart. Every other return = NOT
+ * committed, and no late host-task activity can commit this request afterwards.
+ * *out_override (may be NULL) is set true only on ESP_OK when the G2-07 drain-stuck
+ * exception was used. ESP_ERR_TIMEOUT = the host did not run/finish the check in
+ * time. ESP_ERR_INVALID_STATE = a request of the same transport is still open.
+ * timeout_ms is a total bound (> 350 ms). */
+esp_err_t ble_ota_reboot_guard_commit(uint32_t ble_gen, uint32_t timeout_ms, bool *out_override);
 
 #ifdef __cplusplus
 }

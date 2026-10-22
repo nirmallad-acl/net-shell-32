@@ -1,0 +1,37 @@
+menu "NETSHELL32-5 test hooks (BUILD-TEST IMAGES ONLY - never enable in a shipped image)"
+
+    config NS5_TEST_FAIL_HOST_INIT
+        bool "Force ble_host_start() to fail before touching the radio"
+        default n
+        help
+            Test hook H-8 (TC-INT-01). The only error line of the boot is then
+            BLECLI_HOST_FAIL err=test_injected; the REPL and the serial
+            commands must still work and "fwupgrade start" must refuse with
+            outcome=host_unavailable. Must stay n in every shipped image.
+
+    config NS5_TEST_STALL_HOST
+        bool "Register the ns5_stall <ms> console command"
+        default n
+        help
+            Test hook H-10 (TC-REB-05, V-10). The command blocks the NimBLE
+            host task with vTaskDelay (never a busy loop) for the given
+            time. Must stay n in every shipped image.
+
+    config NS5_TEST_AUTORUN
+        bool "Run a scripted command list on the console after the prompt"
+        default n
+        help
+            Test hook H-11 fallback, used when the host-side capture script
+            cannot send commands. After the REPL started and the BLE host was
+            brought up, the commands in NS5_TEST_AUTORUN_CMDS are run one by
+            one through esp_console_run(), 2 s apart, starting 5 s after boot
+            completes. Must stay n in every shipped image.
+
+    config NS5_TEST_AUTORUN_CMDS
+        string "Semicolon-separated autorun command list"
+        depends on NS5_TEST_AUTORUN
+        default "hw_version;fw_version;reboot_reason;accel_xyz;fwupgrade status"
+        help
+            Each entry is run exactly as if typed at the prompt.
+
+endmenu

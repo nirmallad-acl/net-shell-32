@@ -1,0 +1,8 @@
+# TEST-ONLY sdkconfig fragment (never shipped): enables the BLECLI_TX and
+# BLECLI_TX_SUPPRESS log lines (length only, never content) so REQ-FUNC-61 (an
+# insecure or unsubscribed peer receives zero notification bytes) can be verified
+# from the serial log (TC-BLE-08).
+#
+#   idf.py -B build-test -DSDKCONFIG=build-test/sdkconfig \
+#       -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;test/configs/debug_tx.defaults" build
+CONFIG_BLE_CLI_DEBUG_TX_LOG=y
